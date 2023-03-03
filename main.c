@@ -6,6 +6,7 @@
 // Define InputBuffer as a small wrapper around the 
 // state we need to store to interact with getline()
 typedef struct {
+    // char* 表示字符指针类型，当其指向一个字符串的第一个元素时，就可以表示这个字符串。 
     char* buffer;
     // typedef unsigned int size_t;为无符号整型
     size_t buffer_length;
@@ -14,10 +15,29 @@ typedef struct {
     ssize_t input_length;
 } InputBuffer;
 
+// 枚举是 C 语言中的一种基本数据类型，用于定义一组具有离散值的常量
+// 第一个枚举成员的默认值为整型的 0，后续枚举成员的值在前一个成员上加 1。
+typedef enum {
+    META_COMMAND_SUCCESS,
+    META_COMMAND_UNRECOGNIZED_COMMAND
+} MetaCommandResult;
+
+// 省略枚举名称，直接定义枚举变量
+typedef enum { PREPARE_SUCCESS, PREPARE_UNRECOGNIZED_STATEMENT } PrepareResult;
+
+typedef enum { STATEMENT_INSERT, STATEMENT_SELECT } StatementType;
+
+typedef struct {
+    StatementType type;
+} Statement;
+
 // Initialize a InputBuffer pointer
 InputBuffer* new_input_buffer(){
     // 指针也就是内存地址，指针变量是用来存放内存地址的变量。
-    // malloc() 函数返回一个指针 ，指向已分配大小的内存。casted as InputBuffer*
+    // malloc() 函数从堆内存中申请size个字节的内存，返回一个指针，指向已分配大小的内存。
+    // malloc() 成功时返回申请到的连续内存的首地址
+    // 申请到的内存数据的值是不确定的，如果不清零就直接使用，里面可能会有一些内存段原本就带有数据，影响程序的运行；
+    // here void -> casted as InputBuffer*
     InputBuffer* input_buffer = (InputBuffer*)malloc(sizeof(InputBuffer));
     // 为了使用指向该结构的指针访问结构的成员，您必须使用 -> 运算符
     input_buffer->buffer = NULL;
@@ -73,8 +93,47 @@ void read_input(InputBuffer* input_buffer){
 // the buffer element of the respective structure 
 // (getline allocates memory for input_buffer->buffer in read_input).
 void close_input_buffer(InputBuffer* input_buffer){
+    // 该函数一般与malloc配合使用，尽量每有一个malloc就要有一个free。
+    // 它的作用是释放一块堆内存，其中ptr为堆内存的首地址，
+    // 堆内存在使用完后要及时释放，否则这些内存就会被一直占用。
+    // 注意free只是释放了使用权限，已经写入的数据不会全部清理，并且在free后应该及时置空ptr指针；
     free(input_buffer->buffer);
     free(input_buffer);
+}
+
+// a wrapper for existing functionality that leaves room for more commands
+MetaCommandResult do_meta_command(InputBuffer* input_buffer){
+    if (strcmp(input_buffer->buffer, ".exit") == 0){
+        exit(EXIT_SUCCESS);
+    } else {
+        return META_COMMAND_UNRECOGNIZED_COMMAND;
+    }
+}
+
+// Our SQL Compiler
+PrepareResult prepare_statement(InputBuffer* input_buffer, Statement* statement){
+    // strcmp与strncmp都是用来比较字符串的,区别在于strncmp是比较指定长度字符串,两者都是二进制安全的,且区分大小写。
+    // use strncmp for "insert" since "insert" keyword will be followed by data
+    if (strncmp(input_buffer->buffer, "insert", 6) == 0){
+        statement->type = STATEMENT_INSERT;
+        return PREPARE_SUCCESS;
+    }
+    if (strcmp(input_buffer->buffer, "select") == 0){
+        statement->type = STATEMENT_SELECT;
+        return PREPARE_SUCCESS;
+    }
+    return PREPARE_UNRECOGNIZED_STATEMENT;
+}
+
+void execute_statement(Statement* statement){
+    switch (statement->type){
+        case (STATEMENT_INSERT):
+            printf("do insertion");
+            break;
+        case (STATEMENT_SELECT):
+            printf("do select");
+            break;
+    }
 }
 
 // argc 为参数个数，argv是字符串数组, 第一个存放的是可执行程序的文件名字，然后依次存放传入的参数
@@ -88,16 +147,34 @@ int main(int argc, char* argv[])
     while (true) {
         print_prompt();
         read_input(input_buffer);
-        // Finally we parse and execute the command.
-        // There is only one recognized command right now:
-        // .exit, which terminates the program. Otherwise, we print an error msg and continue the loop.
-        if (strcmp(input_buffer->buffer, ".exit") == 0){
-            close_input_buffer(input_buffer);
-            exit(EXIT_SUCCESS);
-        } else {
-            printf("Unrecognized command '%s'.\n", input_buffer->buffer);
-            
+        // Deal with non-SQL statements like .exit
+        // They are called meta-commands, starting with a dot
+        if (input_buffer->buffer[0] == '.'){
+            switch (do_meta_command(input_buffer)){
+                case (META_COMMAND_SUCCESS):
+                    continue;
+                case (META_COMMAND_UNRECOGNIZED_COMMAND):
+                    printf("Unrecognized command '%s'.\n", input_buffer->buffer);
+                    continue;
+            }
         }
+        // Add a step that converts the line of input into our internal representation of a statement
+        // Our hacky version of the sqlite front-end
+        // the front end of sqlite is a SQL compiler that parses a string
+        // and outputs an internal representation called bytecode.
+        // The bytecode is passed to the virtual machine, which executes it.
+        Statement statement;
+        switch (prepare_statement(input_buffer, &statement)){
+            case (PREPARE_SUCCESS):
+                break;
+            case (PREPARE_UNRECOGNIZED_STATEMENT):
+                printf("Unrecognized keyword at start of '%s'. \n", input_buffer->buffer);
+                continue;
+        }
+        // pass the prepared statement to execute_statement
+        // this function will eventually become our virtual machine.
+        execute_statement(&statement);
+        printf("Executed. \n");
     }
     
 }
