@@ -40,7 +40,7 @@ typedef enum {
     META_COMMAND_UNRECOGNIZED_COMMAND
 } MetaCommandResult;
 
-typedef enum { PREPARE_SUCCESS, PREPARE_SYNTAX_ERROR, PREPARE_UNRECOGNIZED_STATEMENT } PrepareResult;
+typedef enum { PREPARE_SUCCESS, PREPARE_NEGATIVE_ID, PREPARE_STRING_TOO_LONG, PREPARE_SYNTAX_ERROR, PREPARE_UNRECOGNIZED_STATEMENT } PrepareResult;
 
 typedef enum { STATEMENT_INSERT, STATEMENT_SELECT } StatementType;
 
@@ -49,8 +49,8 @@ typedef enum { STATEMENT_INSERT, STATEMENT_SELECT } StatementType;
 
 typedef struct {
     uint32_t id;
-    char username[COLUMN_USERNAME_SIZE];
-    char email[COLUMN_EMAIL_SIZE];
+    char username[COLUMN_USERNAME_SIZE + 1];
+    char email[COLUMN_EMAIL_SIZE + 1];
 } Row;
 
 typedef struct {
@@ -227,6 +227,46 @@ MetaCommandResult do_meta_command(InputBuffer* input_buffer){
     }
 }
 
+PrepareResult prepare_insert(InputBuffer* input_buffer, Statement* statement) {
+    statement->type = STATEMENT_INSERT;
+    // sscanf从字符串读取格式化输入
+    // 把 sscanf 操作的结果存储在一个普通的变量中，应该在标识符前放置引用运算符（&）
+    // 如果成功，sscanf 返回成功匹配和赋值的个数。
+    // If the string it’s reading is larger than the buffer it’s reading into, 
+    // it will cause a buffer overflow and start writing into unexpected places. 
+    // We want to check the length of each string before we copy it into a Row structure. 
+    // And to do that, we need to divide the input by spaces.
+
+    // char*strtok(char*str,const char*delim)分解字符串 str 为一组字符串，delim 为分隔符。
+    char* keyword = strtok(input_buffer->buffer, " ");
+    // 继续获取其他的子字符串
+    char* id_string = strtok(NULL, " ");
+    char* username = strtok(NULL, " ");
+    char* email = strtok(NULL, " ");
+
+    if ( id_string == NULL || username == NULL || email == NULL ) {
+        return PREPARE_SYNTAX_ERROR;
+    }
+
+    int id = atoi(id_string);
+    if (id < 0) {
+        return PREPARE_NEGATIVE_ID;
+    }
+
+    if (strlen(username) > COLUMN_USERNAME_SIZE) {
+        return PREPARE_STRING_TOO_LONG;
+    }
+    if (strlen(email) > COLUMN_EMAIL_SIZE) {
+        return PREPARE_STRING_TOO_LONG;
+    }
+    // char*strcpy(char*dest,const char*src)把 src 所指向的字符串复制到 dest。需要注意的是如果目标数组 dest 不够大，
+    // 而源字符串的长度又太长，可能会造成缓冲溢出的情况
+    statement->row_to_insert.id = id;
+    strcpy(statement->row_to_insert.username, username);
+    strcpy(statement->row_to_insert.email, email);
+    return PREPARE_SUCCESS;
+}
+
 // Our SQL Compiler
 PrepareResult prepare_statement(InputBuffer* input_buffer, Statement* statement){
     // strcmp与strncmp都是用来比较字符串的,区别在于strncmp是比较指定长度字符串,两者都是二进制安全的,且区分大小写。
@@ -235,16 +275,7 @@ PrepareResult prepare_statement(InputBuffer* input_buffer, Statement* statement)
     // insert statements are now going to look like this:
     // insert 1 cstack foo@bar.com
     if (strncmp(input_buffer->buffer, "insert", 6) == 0){
-        statement->type = STATEMENT_INSERT;
-        // sscanf从字符串读取格式化输入
-        // 把 sscanf 操作的结果存储在一个普通的变量中，应该在标识符前放置引用运算符（&）
-        // 如果成功，sscanf 返回成功匹配和赋值的个数。
-        int args_assigned = sscanf(input_buffer->buffer, "insert %d %s %s", &(statement->row_to_insert.id),
-        statement->row_to_insert.username, statement->row_to_insert.email);
-        if (args_assigned < 3) {
-            return PREPARE_SYNTAX_ERROR;
-        }
-        return PREPARE_SUCCESS;
+        return prepare_insert(input_buffer,statement);
     }
     if (strcmp(input_buffer->buffer, "select") == 0){
         statement->type = STATEMENT_SELECT;
@@ -317,8 +348,14 @@ int main(int argc, char* argv[])
         switch (prepare_statement(input_buffer, &statement)){
             case (PREPARE_SUCCESS):
                 break;
+            case (PREPARE_NEGATIVE_ID):
+                printf("ID must be positive.\n");
+                continue;
+            case (PREPARE_STRING_TOO_LONG):
+                printf("String is too long.\n");
+                continue;
             case (PREPARE_SYNTAX_ERROR):
-                printf("Syntax error. Could not parse statement. \n");
+                printf("Syntax error. Could not parse statement.\n");
                 continue;
             case (PREPARE_UNRECOGNIZED_STATEMENT):
                 printf("Unrecognized keyword at start of '%s'. \n", input_buffer->buffer);
@@ -331,7 +368,7 @@ int main(int argc, char* argv[])
                 printf("Executed.\n");
                 break;
             case (EXECUTE_TABLE_FULL):
-                printf("Error: Table full. \n");
+                printf("Error: Table full.\n");
                 break;
         }
         
